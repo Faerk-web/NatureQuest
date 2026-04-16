@@ -53,6 +53,8 @@ export const TalkingTreeScreen: React.FC<TalkingTreeScreenProps> = ({ captureIma
 
   const handleAudioFinished = () => {
     setIsPlaying(false);
+    setStoryText('');
+    setAudioUrl(null);
     setScreenState('idle');
   };
 
@@ -99,7 +101,7 @@ export const TalkingTreeScreen: React.FC<TalkingTreeScreenProps> = ({ captureIma
         <Pressable
           onPress={handleCapturePress}
           style={({ pressed }) => [styles.captureButton, pressed && styles.captureButtonPressed]}
-          disabled={screenState === 'capturing' || screenState === 'loading' || storyStatus === 'loading'}
+          disabled={screenState === 'capturing' || screenState === 'loading' || screenState === 'speaking'}
         >
           <Text style={styles.captureButtonText}>Tag billede</Text>
         </Pressable>

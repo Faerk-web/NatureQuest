@@ -29,6 +29,8 @@ export const voiceMap: Record<string, string> = {
 };
 
 const DEFAULT_VOICE_ID = 'voice_default_tree_placeholder';
+const MAX_CACHED_AUDIO_FILES = 3;
+const ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
 
 const readEnv = (key: string): string | undefined => {
   try {
@@ -61,12 +63,30 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
     return globalThis.btoa(binary);
   }
 
-  const NodeBuffer = require('buffer').Buffer;
-  return NodeBuffer.from(bytes).toString('base64');
+  const bufferPolyfill = require('buffer').Buffer;
+  return bufferPolyfill.from(bytes).toString('base64');
 };
 
 const pickVoiceId = (treeSpecies: string): string => {
   return voiceMap[normalizeSpecies(treeSpecies)] ?? DEFAULT_VOICE_ID;
+};
+
+const sanitizeTreeSpecies = (value: string): string => {
+  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\\s-]/g, '').trim();
+  return cleaned || value.trim();
+};
+
+const extractTimestamp = (fileName: string): number => {
+  const match = fileName.match(/nature-story-(\d+)\.mp3$/);
+  return match ? Number(match[1]) : 0;
+};
+
+const toUserFacingError = (error: unknown): Error => {
+  if (error instanceof TypeError) {
+    return new Error('Netværksfejl: Tjek internetforbindelsen og prøv igen.');
+  }
+
+  return error instanceof Error ? error : new Error('Der opstod en ukendt fejl.');
 };
 
 const parseFirstMessage = (payload: unknown): string => {
@@ -156,10 +176,23 @@ const generateStory = async (treeSpecies: string, openAiApiKey: string): Promise
 const saveAudioToLocalFile = async (arrayBuffer: ArrayBuffer): Promise<string> => {
   try {
     const FileSystem = require('expo-file-system');
+    const cacheDirectory: string = FileSystem.cacheDirectory;
     const fileName = `nature-story-${Date.now()}.mp3`;
-    const uri = `${FileSystem.cacheDirectory}${fileName}`;
+    const uri = `${cacheDirectory}${fileName}`;
     const base64Audio = arrayBufferToBase64(arrayBuffer);
     await FileSystem.writeAsStringAsync(uri, base64Audio, { encoding: FileSystem.EncodingType.Base64 });
+    const cachedFiles: string[] = await FileSystem.readDirectoryAsync(cacheDirectory);
+    const historicalAudioFiles = cachedFiles
+      .filter(name => name.startsWith('nature-story-') && name.endsWith('.mp3'))
+      .sort((left, right) => extractTimestamp(left) - extractTimestamp(right));
+
+    if (historicalAudioFiles.length > MAX_CACHED_AUDIO_FILES) {
+      const filesToDelete = historicalAudioFiles.slice(0, historicalAudioFiles.length - MAX_CACHED_AUDIO_FILES);
+      await Promise.all(
+        filesToDelete.map(file => FileSystem.deleteAsync(`${cacheDirectory}${file}`, { idempotent: true })),
+      );
+    }
+
     return uri;
   } catch (_error) {
     throw new Error('Lokal lydlagring kræver expo-file-system i projektet.');
@@ -176,7 +209,7 @@ const synthesizeSpeech = async (storyText: string, voiceId: string, elevenLabsAp
     },
     body: JSON.stringify({
       text: storyText,
-      model_id: 'eleven_multilingual_v2',
+      model_id: ELEVENLABS_MODEL_ID,
     }),
   });
 
@@ -203,7 +236,8 @@ export const useNatureStory = () => {
       const openAiApiKey = requireEnv('OPENAI_API_KEY');
       const elevenLabsApiKey = requireEnv('ELEVENLABS_API_KEY');
 
-      const treeSpecies = await identifySpecies(imageBase64, openAiApiKey);
+      const identifiedSpecies = await identifySpecies(imageBase64, openAiApiKey);
+      const treeSpecies = sanitizeTreeSpecies(identifiedSpecies);
       const storyText = await generateStory(treeSpecies, openAiApiKey);
       const voiceId = pickVoiceId(treeSpecies);
       const audioUrl = await synthesizeSpeech(storyText, voiceId, elevenLabsApiKey);
@@ -212,10 +246,10 @@ export const useNatureStory = () => {
       setStatus('success');
       return result;
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : 'Der opstod en ukendt fejl.';
-      setError(message);
+      const userFacingError = toUserFacingError(caughtError);
+      setError(userFacingError.message);
       setStatus('error');
-      throw caughtError;
+      throw userFacingError;
     }
   }, []);
 

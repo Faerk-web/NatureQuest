@@ -57,7 +57,7 @@ ViroMaterials.registerMaterials({
   treePulse: {
     diffuseColor: '#44ff88',
     lightingModel: 'Constant',
-    writesToDepthBuffer: true,
+    writesToDepthBuffer: false,
     readsFromDepthBuffer: true,
   },
 });
