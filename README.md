@@ -5,6 +5,6 @@ App for børn i naturen
 
 Nye filer til feature-implementeringen:
 
-- `/home/runner/work/NatureQuest/NatureQuest/src/screens/TalkingTreeScreen.tsx`
-- `/home/runner/work/NatureQuest/NatureQuest/src/scenes/TalkingTreeARScene.tsx`
-- `/home/runner/work/NatureQuest/NatureQuest/src/hooks/useNatureStory.ts`
+- `src/screens/TalkingTreeScreen.tsx`
+- `src/scenes/TalkingTreeARScene.tsx`
+- `src/hooks/useNatureStory.ts`
