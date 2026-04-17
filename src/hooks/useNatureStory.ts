@@ -72,7 +72,7 @@ const pickVoiceId = (treeSpecies: string): string => {
 };
 
 const sanitizeTreeSpecies = (value: string): string => {
-  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\\s-]/g, '').trim();
+  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\s-]/g, '').trim();
   return cleaned || value.trim();
 };
 
