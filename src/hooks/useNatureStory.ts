@@ -64,6 +64,17 @@ const getContent = (response: OpenAICompletionResponse, fallback: string): strin
   return content;
 };
 
+const sanitizeSpeciesForPrompt = (treeSpecies: string): string => {
+  const sanitized = treeSpecies
+    .toLowerCase()
+    .replace(/[^a-zæøå\s-]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+
+  return sanitized || 'ukendt';
+};
+
 const blobToBase64 = async (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -174,6 +185,8 @@ const identifyTreeSpecies = async (imageBase64: string, openAiKey: string): Prom
 };
 
 const generateStory = async (treeSpecies: string, openAiKey: string): Promise<string> => {
+  const safeSpecies = sanitizeSpeciesForPrompt(treeSpecies);
+
   const response = await fetch(OPENAI_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -185,7 +198,7 @@ const generateStory = async (treeSpecies: string, openAiKey: string): Promise<st
       messages: [
         {
           role: 'system',
-          content: `Du er et ${treeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
+          content: `Du er et ${safeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
         },
         {
           role: 'user',

@@ -92,6 +92,7 @@ const TalkingTreeScreen: React.FC = () => {
 
   const canCapture = uiState === 'idle' || uiState === 'error';
   const isPlaying = uiState === 'speaking';
+  const captureButtonText = canCapture ? 'Tag træ-billede' : 'Arbejder...';
 
   const activeError = errorMessage ?? hookError;
 
@@ -169,9 +170,7 @@ const TalkingTreeScreen: React.FC = () => {
           onPress={onCapturePress}
           disabled={!canCapture}
         >
-          <Text style={styles.captureButtonText}>
-            {uiState === 'idle' || uiState === 'error' ? 'Tag træ-billede' : 'Arbejder...'}
-          </Text>
+          <Text style={styles.captureButtonText}>{captureButtonText}</Text>
         </Pressable>
       </View>
     </View>

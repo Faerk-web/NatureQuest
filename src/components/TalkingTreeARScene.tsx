@@ -20,6 +20,12 @@ type SceneNavigatorProps = {
 
 const AnimatedSphere = ViroAnimatedComponent(ViroSphere);
 
+const hasSceneNavigatorProps = (
+  props: SceneNavigatorProps | TalkingTreeARSceneProps,
+): props is SceneNavigatorProps => {
+  return typeof props === 'object' && props !== null && 'sceneNavigator' in props;
+};
+
 ViroAnimations.registerAnimations({
   pulse: [{
     properties: {
@@ -48,7 +54,7 @@ ViroAnimations.registerAnimations({
  * AR-scene der viser træets talepunkt, afspiller spatial lyd og tekst.
  */
 export const TalkingTreeARScene: React.FC<SceneNavigatorProps | TalkingTreeARSceneProps> = (props) => {
-  const appProps = (props as SceneNavigatorProps)?.sceneNavigator?.viroAppProps;
+  const appProps = hasSceneNavigatorProps(props) ? props.sceneNavigator?.viroAppProps : undefined;
   const resolvedProps = useMemo<TalkingTreeARSceneProps>(() => {
     if (appProps) {
       return appProps;
