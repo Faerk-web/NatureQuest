@@ -1,155 +1,118 @@
 import { useCallback, useState } from 'react';
 
-import { defaultVoiceId, voiceMap } from '../config/voiceMap';
-import type { NatureStoryResult } from '../types/talkingTree';
+export type NatureStoryStatus = 'idle' | 'loading' | 'success' | 'error';
 
-type HookStatus = 'idle' | 'loading' | 'error';
-
-type OpenAICompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
+export type NatureStoryResult = {
+  treeSpecies: string;
+  storyText: string;
+  audioUrl: string;
+  voiceId: string;
 };
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
-const ELEVENLABS_ENDPOINT = 'https://api.elevenlabs.io/v1/text-to-speech';
+/** Maps common Danish tree species names to ElevenLabs voice IDs. */
+export const voiceMap: Record<string, string> = {
+  egetræ: 'voice_deep_oak_placeholder',
+  eg: 'voice_deep_oak_placeholder',
+  oak: 'voice_deep_oak_placeholder',
+  birk: 'voice_light_birch_placeholder',
+  birketræ: 'voice_light_birch_placeholder',
+  birch: 'voice_light_birch_placeholder',
+  bøg: 'voice_warm_beech_placeholder',
+  bøgetræ: 'voice_warm_beech_placeholder',
+  fyr: 'voice_rugged_pine_placeholder',
+  fyrretræ: 'voice_rugged_pine_placeholder',
+  gran: 'voice_calm_spruce_placeholder',
+  grantræ: 'voice_calm_spruce_placeholder',
+  ahorn: 'voice_friendly_maple_placeholder',
+  piletræ: 'voice_soft_willow_placeholder',
+  pil: 'voice_soft_willow_placeholder',
+};
 
-const tryReadConfigValue = (name: string): string | undefined => {
+const DEFAULT_VOICE_ID = 'voice_default_tree_placeholder';
+const MAX_CACHED_AUDIO_FILES = 3;
+const ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
+
+const readEnv = (key: string): string | undefined => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const configModule = require('react-native-config');
-    const config = configModule?.default ?? configModule;
-
-    if (config?.[name]) {
-      return config[name] as string;
+    const reactNativeConfig = require('react-native-config')?.default;
+    if (reactNativeConfig?.[key]) {
+      return reactNativeConfig[key] as string;
     }
-  } catch {
-    // Optional dependency.
-  }
+  } catch (_error) {}
+
+  try {
+    const constants = require('expo-constants')?.default;
+    const expoExtra = constants?.expoConfig?.extra ?? constants?.manifest?.extra;
+    if (expoExtra?.[key]) {
+      return expoExtra[key] as string;
+    }
+  } catch (_error) {}
 
   return undefined;
 };
 
-const tryReadExpoExtra = (name: string): string | undefined => {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const constantsModule = require('expo-constants');
-    const constants = constantsModule?.default ?? constantsModule;
-    const extra =
-      constants?.expoConfig?.extra ?? constants?.manifest2?.extra ?? constants?.manifest?.extra;
+const normalizeSpecies = (value: string): string => value.trim().toLowerCase();
 
-    if (extra?.[name]) {
-      return extra[name] as string;
-    }
-  } catch {
-    // Optional dependency.
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer);
+  if (typeof globalThis.btoa === 'function') {
+    let binary = '';
+    bytes.forEach(byte => {
+      binary += String.fromCharCode(byte);
+    });
+    return globalThis.btoa(binary);
   }
 
-  return undefined;
+  const bufferPolyfill = require('buffer').Buffer;
+  return bufferPolyfill.from(bytes).toString('base64');
 };
 
-const getEnvValue = (name: string): string | undefined => {
-  return process.env[name] ?? tryReadConfigValue(name) ?? tryReadExpoExtra(name);
+const pickVoiceId = (treeSpecies: string): string => {
+  return voiceMap[normalizeSpecies(treeSpecies)] ?? DEFAULT_VOICE_ID;
 };
 
-const getContent = (response: OpenAICompletionResponse, fallback: string): string => {
-  const content = response.choices?.[0]?.message?.content?.trim();
+const sanitizeTreeSpecies = (value: string): string => {
+  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\\s-]/g, '').trim();
+  return cleaned || value.trim();
+};
 
-  if (!content) {
-    throw new Error(fallback);
+const extractTimestamp = (fileName: string): number => {
+  const match = fileName.match(/nature-story-(\d+)\.mp3$/);
+  return match ? Number(match[1]) : 0;
+};
+
+const toUserFacingError = (error: unknown): Error => {
+  if (error instanceof TypeError) {
+    return new Error('Netværksfejl: Tjek internetforbindelsen og prøv igen.');
   }
 
-  return content;
+  return error instanceof Error ? error : new Error('Der opstod en ukendt fejl.');
 };
 
-const sanitizeSpeciesForPrompt = (treeSpecies: string): string => {
-  const sanitized = treeSpecies
-    .toLowerCase()
-    .replace(/[^a-zæøå\s-]/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 40);
-
-  return sanitized || 'ukendt';
-};
-
-const blobToBase64 = async (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onloadend = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      const [, base64 = ''] = result.split(',');
-
-      if (!base64) {
-        reject(new Error('Kunne ikke konvertere lydfilen.'));
-        return;
-      }
-
-      resolve(base64);
-    };
-
-    reader.onerror = () => reject(new Error('Kunne ikke læse lydfilen.'));
-    reader.readAsDataURL(blob);
-  });
-};
-
-const saveAudioLocally = async (base64Audio: string): Promise<string> => {
-  const fileName = `talking-tree-${Date.now()}.mp3`;
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const expoFileSystem = require('expo-file-system');
-
-    if (expoFileSystem?.cacheDirectory && expoFileSystem?.writeAsStringAsync) {
-      const uri = `${expoFileSystem.cacheDirectory}${fileName}`;
-      const encoding = expoFileSystem?.EncodingType?.Base64 ?? 'base64';
-      await expoFileSystem.writeAsStringAsync(uri, base64Audio, { encoding });
-
-      return uri;
-    }
-  } catch {
-    // Optional dependency.
+const parseFirstMessage = (payload: unknown): string => {
+  const content = (payload as { choices?: Array<{ message?: { content?: string } }> })?.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Ugyldigt svar fra AI-tjenesten.');
   }
 
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const rnfsModule = require('react-native-fs');
-    const rnfs = rnfsModule?.default ?? rnfsModule;
-
-    if (rnfs?.CachesDirectoryPath && rnfs?.writeFile) {
-      const path = `${rnfs.CachesDirectoryPath}/${fileName}`;
-      await rnfs.writeFile(path, base64Audio, 'base64');
-
-      return `file://${path}`;
-    }
-  } catch {
-    // Optional dependency.
-  }
-
-  return `data:audio/mpeg;base64,${base64Audio}`;
+  return content.trim();
 };
 
-const selectVoiceId = (speciesRaw: string): string => {
-  const species = speciesRaw.trim().toLowerCase();
-
-  if (voiceMap[species]) {
-    return voiceMap[species];
+const requireEnv = (key: 'OPENAI_API_KEY' | 'ELEVENLABS_API_KEY'): string => {
+  const value = readEnv(key);
+  if (!value) {
+    throw new Error(`Manglende miljøvariabel: ${key}`);
   }
 
-  const partialMatch = Object.keys(voiceMap).find((name) => species.includes(name));
-
-  return partialMatch ? voiceMap[partialMatch] : defaultVoiceId;
+  return value;
 };
 
-const identifyTreeSpecies = async (imageBase64: string, openAiKey: string): Promise<string> => {
-  const response = await fetch(OPENAI_ENDPOINT, {
+const identifySpecies = async (imageBase64: string, openAiApiKey: string): Promise<string> => {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
+      Authorization: `Bearer ${openAiApiKey}`,
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${openAiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4o',
@@ -157,10 +120,7 @@ const identifyTreeSpecies = async (imageBase64: string, openAiKey: string): Prom
         {
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: 'Identificér træarten. Svar kun med navnet på træarten på dansk.',
-            },
+            { type: 'text', text: 'Identificér træets art. Svar kun med artsnavn på dansk.' },
             {
               type: 'image_url',
               image_url: {
@@ -170,134 +130,130 @@ const identifyTreeSpecies = async (imageBase64: string, openAiKey: string): Prom
           ],
         },
       ],
-      temperature: 0.2,
       max_tokens: 30,
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Kunne ikke identificere træarten fra billedet.');
+    throw new Error('Kunne ikke identificere træet.');
   }
 
-  const data = (await response.json()) as OpenAICompletionResponse;
-
-  return getContent(data, 'Træarten kunne ikke bestemmes.');
+  const payload = await response.json();
+  return parseFirstMessage(payload);
 };
 
-const generateStory = async (treeSpecies: string, openAiKey: string): Promise<string> => {
-  const safeSpecies = sanitizeSpeciesForPrompt(treeSpecies);
-
-  const response = await fetch(OPENAI_ENDPOINT, {
+const generateStory = async (treeSpecies: string, openAiApiKey: string): Promise<string> => {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
+      Authorization: `Bearer ${openAiApiKey}`,
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${openAiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: `Du er et ${safeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
+          content: `Du er et ${treeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
         },
         {
           role: 'user',
-          content: 'Fortæl din lille naturhistorie nu.',
+          content: 'Fortæl din historie nu.',
         },
       ],
-      temperature: 0.8,
-      max_tokens: 220,
+      max_tokens: 240,
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Kunne ikke lave træets historie.');
+    throw new Error('Kunne ikke generere historie.');
   }
 
-  const data = (await response.json()) as OpenAICompletionResponse;
-
-  return getContent(data, 'Historien kunne ikke genereres.');
+  const payload = await response.json();
+  return parseFirstMessage(payload);
 };
 
-const generateSpeech = async (
-  storyText: string,
-  voiceId: string,
-  elevenLabsKey: string,
-): Promise<string> => {
-  const response = await fetch(`${ELEVENLABS_ENDPOINT}/${voiceId}`, {
+const saveAudioToLocalFile = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+  try {
+    const FileSystem = require('expo-file-system');
+    const cacheDirectory: string = FileSystem.cacheDirectory;
+    const fileName = `nature-story-${Date.now()}.mp3`;
+    const uri = `${cacheDirectory}${fileName}`;
+    const base64Audio = arrayBufferToBase64(arrayBuffer);
+    await FileSystem.writeAsStringAsync(uri, base64Audio, { encoding: FileSystem.EncodingType.Base64 });
+    const cachedFiles: string[] = await FileSystem.readDirectoryAsync(cacheDirectory);
+    const historicalAudioFiles = cachedFiles
+      .filter(name => name.startsWith('nature-story-') && name.endsWith('.mp3'))
+      .sort((left, right) => extractTimestamp(left) - extractTimestamp(right));
+
+    if (historicalAudioFiles.length > MAX_CACHED_AUDIO_FILES) {
+      const filesToDelete = historicalAudioFiles.slice(0, historicalAudioFiles.length - MAX_CACHED_AUDIO_FILES);
+      await Promise.all(
+        filesToDelete.map(file => FileSystem.deleteAsync(`${cacheDirectory}${file}`, { idempotent: true })),
+      );
+    }
+
+    return uri;
+  } catch (_error) {
+    throw new Error('Lokal lydlagring kræver expo-file-system i projektet.');
+  }
+};
+
+const synthesizeSpeech = async (storyText: string, voiceId: string, elevenLabsApiKey: string): Promise<string> => {
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
     method: 'POST',
     headers: {
+      'xi-api-key': elevenLabsApiKey,
       'Content-Type': 'application/json',
       Accept: 'audio/mpeg',
-      'xi-api-key': elevenLabsKey,
     },
     body: JSON.stringify({
       text: storyText,
-      model_id: 'eleven_multilingual_v2',
-      voice_settings: {
-        stability: 0.45,
-        similarity_boost: 0.75,
-      },
+      model_id: ELEVENLABS_MODEL_ID,
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Kunne ikke lave lyd fra historien.');
+    throw new Error('Kunne ikke generere tale.');
   }
 
-  const audioBlob = await response.blob();
-  const base64Audio = await blobToBase64(audioBlob);
-
-  return saveAudioLocally(base64Audio);
+  const audioBuffer = await response.arrayBuffer();
+  return saveAudioToLocalFile(audioBuffer);
 };
 
 /**
- * Kører hele Talking Tree-kæden: artsgenkendelse, historie og tale.
+ * Runs the full tree identification, story generation, and speech synthesis pipeline.
  */
 export const useNatureStory = () => {
-  const [status, setStatus] = useState<HookStatus>('idle');
+  const [status, setStatus] = useState<NatureStoryStatus>('idle');
   const [error, setError] = useState<string | null>(null);
 
   const run = useCallback(async (imageBase64: string): Promise<NatureStoryResult> => {
-    const openAiKey = getEnvValue('OPENAI_API_KEY');
-    const elevenLabsKey = getEnvValue('ELEVENLABS_API_KEY');
-
-    if (!openAiKey || !elevenLabsKey) {
-      const message = 'Mangler API-nøgler. Tjek OPENAI_API_KEY og ELEVENLABS_API_KEY.';
-      setStatus('error');
-      setError(message);
-      throw new Error(message);
-    }
-
     setStatus('loading');
     setError(null);
 
     try {
-      const treeSpecies = await identifyTreeSpecies(imageBase64, openAiKey);
-      const storyText = await generateStory(treeSpecies, openAiKey);
-      const voiceId = selectVoiceId(treeSpecies);
-      const audioUrl = await generateSpeech(storyText, voiceId, elevenLabsKey);
+      const openAiApiKey = requireEnv('OPENAI_API_KEY');
+      const elevenLabsApiKey = requireEnv('ELEVENLABS_API_KEY');
 
-      setStatus('idle');
+      const identifiedSpecies = await identifySpecies(imageBase64, openAiApiKey);
+      const treeSpecies = sanitizeTreeSpecies(identifiedSpecies);
+      const storyText = await generateStory(treeSpecies, openAiApiKey);
+      const voiceId = pickVoiceId(treeSpecies);
+      const audioUrl = await synthesizeSpeech(storyText, voiceId, elevenLabsApiKey);
 
-      return {
-        treeSpecies,
-        storyText,
-        audioUrl,
-        voiceId,
-      };
-    } catch (unknownError) {
-      const message = unknownError instanceof Error ? unknownError.message : 'Ukendt fejl opstod.';
-
+      const result: NatureStoryResult = { treeSpecies, storyText, audioUrl, voiceId };
+      setStatus('success');
+      return result;
+    } catch (caughtError) {
+      const userFacingError = toUserFacingError(caughtError);
+      setError(userFacingError.message);
       setStatus('error');
-      setError(message);
-      throw new Error(message);
+      throw userFacingError;
     }
   }, []);
 
-  return {
-    run,
-    status,
-    error,
-  };
+  return { run, status, error };
 };
+
+export default useNatureStory;
