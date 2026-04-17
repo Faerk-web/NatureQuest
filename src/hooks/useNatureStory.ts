@@ -72,8 +72,8 @@ const pickVoiceId = (treeSpecies: string): string => {
 };
 
 const sanitizeTreeSpecies = (value: string): string => {
-  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\\s-]/g, '').trim();
-  return cleaned || value.trim();
+  const cleaned = value.replace(/[^a-zA-ZæøåÆØÅ\s-]/g, '').trim();
+  return cleaned || 'ukendt';
 };
 
 const extractTimestamp = (fileName: string): number => {
@@ -143,6 +143,7 @@ const identifySpecies = async (imageBase64: string, openAiApiKey: string): Promi
 };
 
 const generateStory = async (treeSpecies: string, openAiApiKey: string): Promise<string> => {
+  const safeSpecies = sanitizeTreeSpecies(treeSpecies);
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -154,7 +155,7 @@ const generateStory = async (treeSpecies: string, openAiApiKey: string): Promise
       messages: [
         {
           role: 'system',
-          content: `Du er et ${treeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
+          content: `Du er et ${safeSpecies}-træ og taler direkte til et 9-årigt barn på dansk. Skriv 3-4 sætninger i første person. Vær sjov og venlig.`,
         },
         {
           role: 'user',
